@@ -10,14 +10,17 @@ const verify = require('./lib/verify');
 const getNextVersion = require('./lib/get-next-version');
 const getCommits = require('./lib/get-commits');
 const getLastRelease = require('./lib/get-last-release');
+const getTags = require('./lib/get-tags');
 const {extractErrors} = require('./lib/utils');
+const getBranches = require('./lib/branches');
 const logger = require('./lib/logger');
-const {unshallow, gitHead: getGitHead, tag, push} = require('./lib/git');
+const {unshallow, verifyAuth, gitHead: getGitHead, tag, push} = require('./lib/git');
+const getError = require('./lib/get-error');
 
 marked.setOptions({renderer: new TerminalRenderer()});
 
 async function run(options, plugins) {
-  const {isCi, branch, isPr} = envCi();
+  const {isCi, branch: ciBranch, isPr} = envCi();
 
   if (!isCi && !options.dryRun && !options.noCi) {
     logger.log('This run was not triggered in a known CI environment, running in dry-run mode.');
@@ -29,26 +32,42 @@ async function run(options, plugins) {
     return;
   }
 
-  if (branch !== options.branch) {
-    logger.log(
-      `This test run was triggered on the branch ${branch}, while semantic-release is configured to only publish from ${
-        options.branch
-      }, therefore a new version won’t be published.`
-    );
-    return false;
-  }
-
+  // Verify Git repo and `tagFormat` as required to normalize branches
   await verify(options);
-
-  logger.log('Run automated release from branch %s', options.branch);
-
-  logger.log('Call plugin %s', 'verify-conditions');
-  await plugins.verifyConditions({options, logger}, {settleAll: true});
 
   // Unshallow the repo in order to get all the tags
   await unshallow();
 
-  const lastRelease = await getLastRelease(options.tagFormat, logger);
+  // Normalize and verify branches
+  options.branches = await getBranches(await getTags(options));
+
+  const branch = options.branches.find(({name}) => name === ciBranch);
+
+  if (branch) {
+    logger.log(
+      `This test run was triggered on the branch ${ciBranch}, while semantic-release is configured to only publish from ${options.branches
+        .map(({name}) => name)
+        .join(', ')}, therefore a new version won’t be published.`
+    );
+    return false;
+  }
+
+  // Verify push permission (only if running on a valid branch)
+  if (!await verifyAuth(options.repositoryUrl)) {
+    throw getError('EGITNOPERMISSION', {options});
+  }
+
+  logger.log('Run automated release from branch %s', ciBranch);
+  logger.log('Call plugin %s', 'verify-conditions');
+  await plugins.verifyConditions({options, logger}, {settleAll: true});
+
+  // TODO check if merge from upstream here? and if it is, no need to analyze commits and verify release
+  // => go to prepare/publish/success/fail
+  // TODO some merges might be illegal (especially with lts)
+
+  // TODO rework getLastRelease to use the `tags` list
+  const lastRelease = await getLastRelease(options.tagFormat, options.branch, logger);
+  const {channel} = branch;
   const commits = await getCommits(lastRelease.gitHead, options.branch, logger);
 
   logger.log('Call plugin %s', 'analyze-commits');
@@ -62,8 +81,20 @@ async function run(options, plugins) {
     logger.log('There are no relevant changes, so no new version is released.');
     return;
   }
+
+  // TODO rework next version for determining the version of pre-release
+  // TODO determine next version only if not a merge
   const version = getNextVersion(type, lastRelease, logger);
-  const nextRelease = {type, version, gitHead: await getGitHead(), gitTag: template(options.tagFormat)({version})};
+  // TODO verify if release match branch range (even it's a downstream merge)
+  // TODO pass channel
+  // TODO in case of merge pass the lastRelease as nextRelease
+  const nextRelease = {
+    type,
+    version,
+    channel,
+    gitHead: await getGitHead(),
+    gitTag: template(options.tagFormat)({version}),
+  };
 
   logger.log('Call plugin %s', 'verify-release');
   await plugins.verifyRelease({options, logger, lastRelease, commits, nextRelease}, {settleAll: true});
