@@ -1,7 +1,7 @@
 {
   "name": "semantic-release",
   "description": "Automated semver compliant package publishing",
-  "version": "0.0.0-development",
+  "version": "0.0.1-development",
   "author": "Stephan Bönnemann <stephan@boennemann.me> (http://boennemann.me)",
   "bin": {
     "semantic-release": "bin/semantic-release.js"

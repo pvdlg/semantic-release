@@ -160,7 +160,7 @@ module.exports = async opts => {
   console.log('Set GIT_ASKPASS and GIT_TERMINAL_PROMPT');
   process.env.GIT_ASKPASS = 'echo';
   process.env.GIT_TERMINAL_PROMPT = 0;
-  logger.log(`Running %s version %s - Test`, pkg.name, pkg.version);
+  logger.log(`Running %s version %s`, pkg.name, pkg.version);
   const unhook = hookStd({silent: false}, hideSensitive);
   try {
     const config = await getConfig(opts, logger);
